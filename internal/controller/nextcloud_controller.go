@@ -139,8 +139,14 @@ func (r *NextcloudReconciler) reconcileDeployment(ctx context.Context, nc *nextc
 		return err
 	}
 
-	found.Spec = deployment.Spec
-	return r.Update(ctx, found)
+	if found.Spec.Replicas == nil || *found.Spec.Replicas != *deployment.Spec.Replicas ||
+		found.Spec.Template.Spec.Containers[0].Image != deployment.Spec.Template.Spec.Containers[0].Image {
+		found.Spec.Replicas = deployment.Spec.Replicas
+		found.Spec.Template = deployment.Spec.Template
+		found.Spec.Selector = deployment.Spec.Selector
+		return r.Update(ctx, found)
+	}
+	return nil
 }
 
 func (r *NextcloudReconciler) reconcileService(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
@@ -160,9 +166,14 @@ func (r *NextcloudReconciler) reconcileService(ctx context.Context, nc *nextclou
 }
 
 func (r *NextcloudReconciler) updateStatus(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
-	if nc.Status.Phase != "Ready" {
-		nc.Status.Phase = "Ready"
-		return r.Status().Update(ctx, nc)
+	latest := &nextcloudv1.Nextcloud{}
+	if err := r.Get(ctx, client.ObjectKey{Name: nc.Name, Namespace: nc.Namespace}, latest); err != nil {
+		return err
+	}
+
+	if latest.Status.Phase != "Ready" {
+		latest.Status.Phase = "Ready"
+		return r.Status().Update(ctx, latest)
 	}
 	return nil
 }
