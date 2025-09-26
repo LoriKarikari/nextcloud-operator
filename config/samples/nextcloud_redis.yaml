@@ -4,10 +4,11 @@ metadata:
   labels:
     app.kubernetes.io/name: nextcloud-operator
     app.kubernetes.io/managed-by: kustomize
-  name: nextcloud-sample
+  name: nextcloud-custom-admin
 spec:
-  version: "30.0.1"
+  version: "30.0.16"
   replicas: 1
+  storageSize: "15Gi"
   admin:
     username: "myuser"
     secretRef:
@@ -17,3 +18,7 @@ spec:
   database:
     version: "16"
     storageSize: "8Gi"
+  redis:
+    enabled: true
+    cpu: "500m"
+    memory: "256Mi"
