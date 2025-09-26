@@ -1,0 +1,9 @@
+apiVersion: nextcloud.lorikarikari.io/v1
+kind: Nextcloud
+metadata:
+  labels:
+    app.kubernetes.io/name: nextcloud-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: nextcloud-sample
+spec:
+  # TODO(user): Add fields here

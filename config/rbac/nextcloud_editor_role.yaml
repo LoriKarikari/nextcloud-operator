@@ -1,0 +1,33 @@
+# This rule is not used by the project nextcloud-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants permissions to create, update, and delete resources within the nextcloud.lorikarikari.io.
+# This role is intended for users who need to manage these resources
+# but should not control RBAC or manage permissions for others.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: nextcloud-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: nextcloud-editor-role
+rules:
+- apiGroups:
+  - nextcloud.lorikarikari.io
+  resources:
+  - nextclouds
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - nextcloud.lorikarikari.io
+  resources:
+  - nextclouds/status
+  verbs:
+  - get

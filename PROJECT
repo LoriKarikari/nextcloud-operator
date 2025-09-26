@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: nextcloud-operator
 repo: github.com/LoriKarikari/nextcloud-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: lorikarikari.io
+  group: nextcloud
+  kind: Nextcloud
+  path: github.com/LoriKarikari/nextcloud-operator/api/v1
+  version: v1
 version: "3"
