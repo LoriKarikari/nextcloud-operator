@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +37,11 @@ func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileSecret(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to reconcile Secret")
 		return ctrl.Result{}, err
 	}
 
@@ -92,6 +99,25 @@ func (r *NextcloudReconciler) deploymentForNextcloud(nc *nextcloudv1.Nextcloud) 
 							{
 								Name:  "SQLITE_DATABASE",
 								Value: "nextcloud",
+							},
+							{
+								Name:  "NEXTCLOUD_ADMIN_USER",
+								Value: "admin",
+							},
+							{
+								Name: "NEXTCLOUD_ADMIN_PASSWORD",
+								ValueFrom: &corev1.EnvVarSource{
+									SecretKeyRef: &corev1.SecretKeySelector{
+										LocalObjectReference: corev1.LocalObjectReference{
+											Name: nc.Name + "-admin",
+										},
+										Key: "password",
+									},
+								},
+							},
+							{
+								Name:  "NEXTCLOUD_TRUSTED_DOMAINS",
+								Value: "localhost *",
 							},
 						},
 					}},
@@ -178,11 +204,42 @@ func (r *NextcloudReconciler) updateStatus(ctx context.Context, nc *nextcloudv1.
 	return nil
 }
 
+func (r *NextcloudReconciler) reconcileSecret(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	secretName := nc.Name + "-admin"
+	secret := &corev1.Secret{}
+
+	err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: nc.Namespace}, secret)
+	if err != nil && errors.IsNotFound(err) {
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: nc.Namespace,
+			},
+			StringData: map[string]string{
+				"username": "admin",
+				"password": r.generatePassword(),
+			},
+		}
+		ctrl.SetControllerReference(nc, secret, r.Scheme)
+		return r.Create(ctx, secret)
+	}
+	return err
+}
+
+func (r *NextcloudReconciler) generatePassword() string {
+	bytes := make([]byte, 24)
+	if _, err := rand.Read(bytes); err != nil {
+		return "fallback-password-" + string(bytes[:8])
+	}
+	return base64.URLEncoding.EncodeToString(bytes)[:32]
+}
+
 func (r *NextcloudReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nextcloudv1.Nextcloud{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.Secret{}).
 		Named("nextcloud").
 		Complete(r)
 }
