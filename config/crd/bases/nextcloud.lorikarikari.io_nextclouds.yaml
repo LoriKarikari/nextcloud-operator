@@ -66,6 +66,25 @@ spec:
                     description: Username for the admin user
                     type: string
                 type: object
+              database:
+                description: Database configuration
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled controls whether to deploy a PostgreSQL database
+                    type: boolean
+                  storageClass:
+                    description: StorageClass for the database PVC
+                    type: string
+                  storageSize:
+                    default: 8Gi
+                    description: StorageSize specifies the size of the database storage
+                    type: string
+                  version:
+                    default: "16"
+                    description: PostgreSQL version
+                    type: string
+                type: object
               replicas:
                 default: 1
                 description: Replicas specifies the number of Nextcloud pods

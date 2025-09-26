@@ -18,19 +18,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	nextcloudv1 "github.com/LoriKarikari/nextcloud-operator/api/v1"
+	"github.com/LoriKarikari/nextcloud-operator/internal/postgres"
 )
 
 type NextcloudReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme             *runtime.Scheme
+	PostgresReconciler *postgres.Reconciler
 }
 
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 
 func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -64,6 +68,11 @@ func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	if err := r.reconcileSecret(ctx, &nextcloud); err != nil {
 		logger.Error(err, "Failed to reconcile Secret")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.PostgresReconciler.ReconcileDatabase(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to reconcile Database")
 		return ctrl.Result{}, err
 	}
 
@@ -245,10 +254,6 @@ func (r *NextcloudReconciler) getEnvironmentVariables(nc *nextcloudv1.Nextcloud)
 
 	env := []corev1.EnvVar{
 		{
-			Name:  "SQLITE_DATABASE",
-			Value: "nextcloud",
-		},
-		{
 			Name:  "NEXTCLOUD_ADMIN_USER",
 			Value: adminUsername,
 		},
@@ -268,6 +273,46 @@ func (r *NextcloudReconciler) getEnvironmentVariables(nc *nextcloudv1.Nextcloud)
 			Value: "localhost *",
 		},
 	}
+
+	env = append(env, []corev1.EnvVar{
+		{
+			Name:  "POSTGRES_HOST",
+			Value: nc.Name + "-postgres",
+		},
+		{
+			Name: "POSTGRES_DB",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: nc.Name + "-postgres",
+					},
+					Key: "POSTGRES_DB",
+				},
+			},
+		},
+		{
+			Name: "POSTGRES_USER",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: nc.Name + "-postgres",
+					},
+					Key: "POSTGRES_USER",
+				},
+			},
+		},
+		{
+			Name: "POSTGRES_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: nc.Name + "-postgres",
+					},
+					Key: "POSTGRES_PASSWORD",
+				},
+			},
+		},
+	}...)
 
 	return env
 }
@@ -350,9 +395,15 @@ func (r *NextcloudReconciler) finalize(ctx context.Context, nc *nextcloudv1.Next
 }
 
 func (r *NextcloudReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.PostgresReconciler = &postgres.Reconciler{
+		Client: r.Client,
+		Scheme: r.Scheme,
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nextcloudv1.Nextcloud{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Named("nextcloud").

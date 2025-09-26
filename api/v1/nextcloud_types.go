@@ -33,11 +33,28 @@ type AdminSpec struct {
 	SecretRef *SecretReference `json:"secretRef,omitempty"`
 }
 
+// DatabaseSpec defines database configuration
+type DatabaseSpec struct {
+	// StorageSize specifies the size of the database storage
+	// +kubebuilder:default="8Gi"
+	// +optional
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// StorageClass for the database PVC
+	// +optional
+	StorageClass *string `json:"storageClass,omitempty"`
+
+	// PostgreSQL version
+	// +kubebuilder:default="16"
+	// +optional
+	Version string `json:"version,omitempty"`
+}
+
 // NextcloudSpec defines the desired state of Nextcloud
 type NextcloudSpec struct {
 	// Version specifies the Nextcloud version to deploy
 	// +kubebuilder:validation:Pattern="^[0-9]+\\.[0-9]+\\.[0-9]+$"
-	// +kubebuilder:default="29.0.8"
+	// +kubebuilder:default="30.0.16"
 	Version string `json:"version"`
 
 	// Replicas specifies the number of Nextcloud pods
@@ -50,6 +67,10 @@ type NextcloudSpec struct {
 	// Admin user configuration
 	// +optional
 	Admin *AdminSpec `json:"admin,omitempty"`
+
+	// Database configuration
+	// +optional
+	Database *DatabaseSpec `json:"database,omitempty"`
 }
 
 // NextcloudStatus defines the observed state of Nextcloud.

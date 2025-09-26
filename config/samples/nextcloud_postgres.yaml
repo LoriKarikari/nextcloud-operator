@@ -14,3 +14,6 @@ spec:
       name: "custom-admin-secret"
       passwordKey: "password"
       usernameKey: "username"
+  database:
+    version: "16"
+    storageSize: "8Gi"
