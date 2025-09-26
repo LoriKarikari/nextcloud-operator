@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: nextcloud-sample
 spec:
-  version: "29.0.8"
+  version: "30.0.1"
   replicas: 1
   admin:
     username: "myuser"

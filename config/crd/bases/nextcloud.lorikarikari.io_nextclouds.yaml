@@ -69,10 +69,6 @@ spec:
               database:
                 description: Database configuration
                 properties:
-                  enabled:
-                    default: false
-                    description: Enabled controls whether to deploy a PostgreSQL database
-                    type: boolean
                   storageClass:
                     description: StorageClass for the database PVC
                     type: string
@@ -93,7 +89,7 @@ spec:
                 minimum: 1
                 type: integer
               version:
-                default: 29.0.8
+                default: 30.0.16
                 description: Version specifies the Nextcloud version to deploy
                 pattern: ^[0-9]+\.[0-9]+\.[0-9]+$
                 type: string

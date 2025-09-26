@@ -4,6 +4,7 @@ before:
   hooks:
     - go mod tidy
     - make manifests
+    - make build-installer
 
 builds:
   - env:
@@ -44,6 +45,7 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
     files:
       - config/**/*
+      - dist/install.yaml
 
 checksum:
   name_template: 'checksums.txt'
