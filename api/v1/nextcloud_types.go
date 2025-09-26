@@ -59,6 +59,10 @@ type NextcloudStatus struct {
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
+	// ObservedGeneration is the last observed generation
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// conditions represent the current state of the Nextcloud resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//

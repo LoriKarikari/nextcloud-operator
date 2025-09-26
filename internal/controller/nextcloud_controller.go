@@ -8,11 +8,13 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	nextcloudv1 "github.com/LoriKarikari/nextcloud-operator/api/v1"
@@ -39,6 +41,25 @@ func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	finalizerName := "nextcloud.lorikarikari.io/finalizer"
+
+	if nextcloud.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(&nextcloud, finalizerName) {
+			controllerutil.AddFinalizer(&nextcloud, finalizerName)
+			return ctrl.Result{}, r.Update(ctx, &nextcloud)
+		}
+	} else {
+		if controllerutil.ContainsFinalizer(&nextcloud, finalizerName) {
+			if err := r.finalize(ctx, &nextcloud); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			controllerutil.RemoveFinalizer(&nextcloud, finalizerName)
+			return ctrl.Result{}, r.Update(ctx, &nextcloud)
+		}
+		return ctrl.Result{}, nil
 	}
 
 	if err := r.reconcileSecret(ctx, &nextcloud); err != nil {
@@ -176,11 +197,43 @@ func (r *NextcloudReconciler) updateStatus(ctx context.Context, nc *nextcloudv1.
 		return err
 	}
 
-	if latest.Status.Phase != "Ready" {
-		latest.Status.Phase = "Ready"
+	latest.Status.ObservedGeneration = nc.Generation
+
+	deployment := &appsv1.Deployment{}
+	err := r.Get(ctx, client.ObjectKey{Name: nc.Name, Namespace: nc.Namespace}, deployment)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			r.setCondition(latest, "Available", metav1.ConditionFalse, "DeploymentNotFound", "Deployment not found")
+			latest.Status.Phase = "Pending"
+		} else {
+			r.setCondition(latest, "Available", metav1.ConditionUnknown, "DeploymentCheckFailed", "Failed to check deployment status")
+			latest.Status.Phase = "Pending"
+		}
 		return r.Status().Update(ctx, latest)
 	}
-	return nil
+
+	if deployment.Status.ReadyReplicas > 0 {
+		r.setCondition(latest, "Available", metav1.ConditionTrue, "DeploymentReady", "Deployment is ready")
+		r.setCondition(latest, "Progressing", metav1.ConditionFalse, "DeploymentComplete", "Deployment completed successfully")
+		latest.Status.Phase = "Ready"
+	} else {
+		r.setCondition(latest, "Available", metav1.ConditionFalse, "DeploymentNotReady", "Deployment not ready")
+		r.setCondition(latest, "Progressing", metav1.ConditionTrue, "DeploymentProgressing", "Deployment is progressing")
+		latest.Status.Phase = "Installing"
+	}
+
+	return r.Status().Update(ctx, latest)
+}
+
+func (r *NextcloudReconciler) setCondition(nc *nextcloudv1.Nextcloud, condType string, status metav1.ConditionStatus, reason, message string) {
+	condition := metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+	}
+	meta.SetStatusCondition(&nc.Status.Conditions, condition)
 }
 
 func (r *NextcloudReconciler) getEnvironmentVariables(nc *nextcloudv1.Nextcloud) []corev1.EnvVar {
@@ -271,6 +324,29 @@ func (r *NextcloudReconciler) generatePassword() string {
 		return "fallback-password-" + string(bytes[:8])
 	}
 	return base64.URLEncoding.EncodeToString(bytes)[:32]
+}
+
+func (r *NextcloudReconciler) finalize(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	logger := log.FromContext(ctx)
+	logger.Info("Finalizing Nextcloud", "name", nc.Name, "namespace", nc.Namespace)
+
+	if nc.Spec.Admin == nil || nc.Spec.Admin.SecretRef == nil {
+		secretName := nc.Name + "-admin"
+		secret := &corev1.Secret{}
+		err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: nc.Namespace}, secret)
+		if err == nil {
+			logger.Info("Deleting auto-generated admin secret", "secret", secretName)
+			if err := r.Delete(ctx, secret); err != nil {
+				logger.Error(err, "Failed to delete admin secret", "secret", secretName)
+				return err
+			}
+		} else if !errors.IsNotFound(err) {
+			return err
+		}
+	}
+
+	logger.Info("Finalization completed", "name", nc.Name, "namespace", nc.Namespace)
+	return nil
 }
 
 func (r *NextcloudReconciler) SetupWithManager(mgr ctrl.Manager) error {
