@@ -25,23 +25,25 @@ import (
 
 // NextcloudSpec defines the desired state of Nextcloud
 type NextcloudSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// Version specifies the Nextcloud version to deploy
+	// +kubebuilder:validation:Pattern="^[0-9]+\\.[0-9]+\\.[0-9]+$"
+	// +kubebuilder:default="29.0.8"
+	Version string `json:"version"`
 
-	// foo is an example field of Nextcloud. Edit nextcloud_types.go to remove/update
+	// Replicas specifies the number of Nextcloud pods
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	// +kubebuilder:default=1
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // NextcloudStatus defines the observed state of Nextcloud.
 type NextcloudStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// Phase represents the current deployment phase
+	// +kubebuilder:validation:Enum=Pending;Installing;Ready;Upgrading;Failed
+	// +optional
+	Phase string `json:"phase,omitempty"`
 
 	// conditions represent the current state of the Nextcloud resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
