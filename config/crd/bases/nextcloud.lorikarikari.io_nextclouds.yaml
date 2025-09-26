@@ -39,6 +39,33 @@ spec:
           spec:
             description: spec defines the desired state of Nextcloud
             properties:
+              admin:
+                description: Admin user configuration
+                properties:
+                  secretRef:
+                    description: |-
+                      SecretRef references a Secret containing admin credentials
+                      If not provided, a secret will be auto-generated
+                      Required keys: password (and optionally username)
+                    properties:
+                      name:
+                        description: Name of the secret
+                        type: string
+                      passwordKey:
+                        default: password
+                        description: Key within the secret containing the password
+                        type: string
+                      usernameKey:
+                        description: Key within the secret containing the username
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  username:
+                    default: admin
+                    description: Username for the admin user
+                    type: string
+                type: object
               replicas:
                 default: 1
                 description: Replicas specifies the number of Nextcloud pods

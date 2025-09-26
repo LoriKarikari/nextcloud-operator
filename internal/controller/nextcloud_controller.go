@@ -28,6 +28,7 @@ type NextcloudReconciler struct {
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -74,6 +75,8 @@ func (r *NextcloudReconciler) deploymentForNextcloud(nc *nextcloudv1.Nextcloud) 
 		"version": nc.Spec.Version,
 	}
 
+	env := r.getEnvironmentVariables(nc)
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nc.Name,
@@ -95,31 +98,7 @@ func (r *NextcloudReconciler) deploymentForNextcloud(nc *nextcloudv1.Nextcloud) 
 						Ports: []corev1.ContainerPort{{
 							ContainerPort: 80,
 						}},
-						Env: []corev1.EnvVar{
-							{
-								Name:  "SQLITE_DATABASE",
-								Value: "nextcloud",
-							},
-							{
-								Name:  "NEXTCLOUD_ADMIN_USER",
-								Value: "admin",
-							},
-							{
-								Name: "NEXTCLOUD_ADMIN_PASSWORD",
-								ValueFrom: &corev1.EnvVarSource{
-									SecretKeyRef: &corev1.SecretKeySelector{
-										LocalObjectReference: corev1.LocalObjectReference{
-											Name: nc.Name + "-admin",
-										},
-										Key: "password",
-									},
-								},
-							},
-							{
-								Name:  "NEXTCLOUD_TRUSTED_DOMAINS",
-								Value: "localhost *",
-							},
-						},
+						Env: env,
 					}},
 				},
 			},
@@ -204,19 +183,79 @@ func (r *NextcloudReconciler) updateStatus(ctx context.Context, nc *nextcloudv1.
 	return nil
 }
 
+func (r *NextcloudReconciler) getEnvironmentVariables(nc *nextcloudv1.Nextcloud) []corev1.EnvVar {
+	adminSecretName, _, adminPasswordKey := r.getAdminSecretInfo(nc)
+	adminUsername := "admin"
+	if nc.Spec.Admin != nil && nc.Spec.Admin.Username != "" {
+		adminUsername = nc.Spec.Admin.Username
+	}
+
+	env := []corev1.EnvVar{
+		{
+			Name:  "SQLITE_DATABASE",
+			Value: "nextcloud",
+		},
+		{
+			Name:  "NEXTCLOUD_ADMIN_USER",
+			Value: adminUsername,
+		},
+		{
+			Name: "NEXTCLOUD_ADMIN_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: adminSecretName,
+					},
+					Key: adminPasswordKey,
+				},
+			},
+		},
+		{
+			Name:  "NEXTCLOUD_TRUSTED_DOMAINS",
+			Value: "localhost *",
+		},
+	}
+
+	return env
+}
+
+func (r *NextcloudReconciler) getAdminSecretInfo(nc *nextcloudv1.Nextcloud) (secretName, usernameKey, passwordKey string) {
+	if nc.Spec.Admin != nil && nc.Spec.Admin.SecretRef != nil {
+		secretName = nc.Spec.Admin.SecretRef.Name
+		usernameKey = nc.Spec.Admin.SecretRef.UsernameKey
+		passwordKey = nc.Spec.Admin.SecretRef.PasswordKey
+		if passwordKey == "" {
+			passwordKey = "password"
+		}
+	} else {
+		secretName = nc.Name + "-admin"
+		passwordKey = "password"
+	}
+	return
+}
+
 func (r *NextcloudReconciler) reconcileSecret(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	if nc.Spec.Admin != nil && nc.Spec.Admin.SecretRef != nil {
+		return nil
+	}
+
 	secretName := nc.Name + "-admin"
 	secret := &corev1.Secret{}
 
 	err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: nc.Namespace}, secret)
 	if err != nil && errors.IsNotFound(err) {
+		adminUsername := "admin"
+		if nc.Spec.Admin != nil && nc.Spec.Admin.Username != "" {
+			adminUsername = nc.Spec.Admin.Username
+		}
+
 		secret = &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
 				Namespace: nc.Namespace,
 			},
 			StringData: map[string]string{
-				"username": "admin",
+				"username": adminUsername,
 				"password": r.generatePassword(),
 			},
 		}

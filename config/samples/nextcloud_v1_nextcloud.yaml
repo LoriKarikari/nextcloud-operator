@@ -8,3 +8,9 @@ metadata:
 spec:
   version: "29.0.8"
   replicas: 1
+  admin:
+    username: "myuser"
+    secretRef:
+      name: "custom-admin-secret"
+      passwordKey: "password"
+      usernameKey: "username"
