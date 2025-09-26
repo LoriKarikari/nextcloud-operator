@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -19,12 +20,14 @@ import (
 
 	nextcloudv1 "github.com/LoriKarikari/nextcloud-operator/api/v1"
 	"github.com/LoriKarikari/nextcloud-operator/internal/postgres"
+	"github.com/LoriKarikari/nextcloud-operator/internal/redis"
 )
 
 type NextcloudReconciler struct {
 	client.Client
 	Scheme             *runtime.Scheme
 	PostgresReconciler *postgres.Reconciler
+	RedisReconciler    *redis.Reconciler
 }
 
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds,verbs=get;list;watch;create;update;patch;delete
@@ -35,6 +38,7 @@ type NextcloudReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -71,8 +75,18 @@ func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	if err := r.reconcilePVC(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to reconcile PVC")
+		return ctrl.Result{}, err
+	}
+
 	if err := r.PostgresReconciler.ReconcileDatabase(ctx, &nextcloud); err != nil {
 		logger.Error(err, "Failed to reconcile Database")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.RedisReconciler.ReconcileRedis(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to reconcile Redis")
 		return ctrl.Result{}, err
 	}
 
@@ -129,6 +143,18 @@ func (r *NextcloudReconciler) deploymentForNextcloud(nc *nextcloudv1.Nextcloud) 
 							ContainerPort: 80,
 						}},
 						Env: env,
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:      "nextcloud-data",
+							MountPath: "/var/www/html",
+						}},
+					}},
+					Volumes: []corev1.Volume{{
+						Name: "nextcloud-data",
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+								ClaimName: nc.Name + "-data",
+							},
+						},
 					}},
 				},
 			},
@@ -174,8 +200,38 @@ func (r *NextcloudReconciler) reconcileDeployment(ctx context.Context, nc *nextc
 		return err
 	}
 
-	if found.Spec.Replicas == nil || *found.Spec.Replicas != *deployment.Spec.Replicas ||
-		found.Spec.Template.Spec.Containers[0].Image != deployment.Spec.Template.Spec.Containers[0].Image {
+	needsUpdate := false
+	if found.Spec.Replicas == nil || *found.Spec.Replicas != *deployment.Spec.Replicas {
+		needsUpdate = true
+	}
+	if found.Spec.Template.Spec.Containers[0].Image != deployment.Spec.Template.Spec.Containers[0].Image {
+		needsUpdate = true
+	}
+
+	if len(found.Spec.Template.Spec.Containers[0].Env) != len(deployment.Spec.Template.Spec.Containers[0].Env) {
+		needsUpdate = true
+	} else {
+		foundEnvMap := make(map[string]string)
+		for _, env := range found.Spec.Template.Spec.Containers[0].Env {
+			foundEnvMap[env.Name] = env.Value
+		}
+		for _, env := range deployment.Spec.Template.Spec.Containers[0].Env {
+			if foundEnvMap[env.Name] != env.Value {
+				needsUpdate = true
+				break
+			}
+		}
+	}
+
+	if len(found.Spec.Template.Spec.Containers[0].VolumeMounts) != len(deployment.Spec.Template.Spec.Containers[0].VolumeMounts) {
+		needsUpdate = true
+	}
+
+	if len(found.Spec.Template.Spec.Volumes) != len(deployment.Spec.Template.Spec.Volumes) {
+		needsUpdate = true
+	}
+
+	if needsUpdate {
 		found.Spec.Replicas = deployment.Spec.Replicas
 		found.Spec.Template = deployment.Spec.Template
 		found.Spec.Selector = deployment.Spec.Selector
@@ -314,6 +370,17 @@ func (r *NextcloudReconciler) getEnvironmentVariables(nc *nextcloudv1.Nextcloud)
 		},
 	}...)
 
+	env = append(env, []corev1.EnvVar{
+		{
+			Name:  "REDIS_HOST",
+			Value: nc.Name + "-redis",
+		},
+		{
+			Name:  "REDIS_HOST_PORT",
+			Value: "6379",
+		},
+	}...)
+
 	return env
 }
 
@@ -363,6 +430,48 @@ func (r *NextcloudReconciler) reconcileSecret(ctx context.Context, nc *nextcloud
 	return err
 }
 
+func (r *NextcloudReconciler) reconcilePVC(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	pvc := r.pvcForNextcloud(nc)
+
+	found := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, client.ObjectKey{Name: pvc.Name, Namespace: pvc.Namespace}, found)
+	if err != nil && errors.IsNotFound(err) {
+		return r.Create(ctx, pvc)
+	}
+	return err
+}
+
+func (r *NextcloudReconciler) pvcForNextcloud(nc *nextcloudv1.Nextcloud) *corev1.PersistentVolumeClaim {
+	storageSize := "10Gi"
+	if nc.Spec.StorageSize != "" {
+		storageSize = nc.Spec.StorageSize
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nc.Name + "-data",
+			Namespace: nc.Namespace,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{
+				corev1.ReadWriteOnce,
+			},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(storageSize),
+				},
+			},
+		},
+	}
+
+	if nc.Spec.StorageClass != nil {
+		pvc.Spec.StorageClassName = nc.Spec.StorageClass
+	}
+
+	ctrl.SetControllerReference(nc, pvc, r.Scheme)
+	return pvc
+}
+
 func (r *NextcloudReconciler) generatePassword() string {
 	bytes := make([]byte, 24)
 	if _, err := rand.Read(bytes); err != nil {
@@ -400,12 +509,19 @@ func (r *NextcloudReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Scheme: r.Scheme,
 	}
 
+	r.RedisReconciler = &redis.Reconciler{
+		Client: r.Client,
+		Scheme: r.Scheme,
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nextcloudv1.Nextcloud{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
 		Named("nextcloud").
 		Complete(r)
 }

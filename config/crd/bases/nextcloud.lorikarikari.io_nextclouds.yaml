@@ -81,6 +81,22 @@ spec:
                     description: PostgreSQL version
                     type: string
                 type: object
+              redis:
+                description: Redis cache configuration
+                properties:
+                  cpu:
+                    default: 500m
+                    description: CPU limit for Redis
+                    type: string
+                  enabled:
+                    default: true
+                    description: Enabled controls whether Redis cache is deployed
+                    type: boolean
+                  memory:
+                    default: 256Mi
+                    description: Memory limit for Redis
+                    type: string
+                type: object
               replicas:
                 default: 1
                 description: Replicas specifies the number of Nextcloud pods
@@ -88,6 +104,14 @@ spec:
                 maximum: 10
                 minimum: 1
                 type: integer
+              storageClass:
+                description: StorageClass for the Nextcloud data PVC
+                type: string
+              storageSize:
+                default: 10Gi
+                description: StorageSize specifies the size of the Nextcloud data
+                  storage
+                type: string
               version:
                 default: 30.0.16
                 description: Version specifies the Nextcloud version to deploy

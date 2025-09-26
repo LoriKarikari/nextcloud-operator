@@ -50,6 +50,24 @@ type DatabaseSpec struct {
 	Version string `json:"version,omitempty"`
 }
 
+// RedisSpec defines Redis cache configuration
+type RedisSpec struct {
+	// Enabled controls whether Redis cache is deployed
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Memory limit for Redis
+	// +kubebuilder:default="256Mi"
+	// +optional
+	Memory string `json:"memory,omitempty"`
+
+	// CPU limit for Redis
+	// +kubebuilder:default="500m"
+	// +optional
+	CPU string `json:"cpu,omitempty"`
+}
+
 // NextcloudSpec defines the desired state of Nextcloud
 type NextcloudSpec struct {
 	// Version specifies the Nextcloud version to deploy
@@ -71,6 +89,19 @@ type NextcloudSpec struct {
 	// Database configuration
 	// +optional
 	Database *DatabaseSpec `json:"database,omitempty"`
+
+	// Redis cache configuration
+	// +optional
+	Redis *RedisSpec `json:"redis,omitempty"`
+
+	// StorageSize specifies the size of the Nextcloud data storage
+	// +kubebuilder:default="10Gi"
+	// +optional
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// StorageClass for the Nextcloud data PVC
+	// +optional
+	StorageClass *string `json:"storageClass,omitempty"`
 }
 
 // NextcloudStatus defines the observed state of Nextcloud.
