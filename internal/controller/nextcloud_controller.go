@@ -1,33 +1,21 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
 	"context"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	nextcloudv1 "github.com/LoriKarikari/nextcloud-operator/api/v1"
 )
 
-// NextcloudReconciler reconciles a Nextcloud object
 type NextcloudReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -36,28 +24,154 @@ type NextcloudReconciler struct {
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nextcloud.lorikarikari.io,resources=nextclouds/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Nextcloud object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/reconcile
 func (r *NextcloudReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var nextcloud nextcloudv1.Nextcloud
+	if err := r.Get(ctx, req.NamespacedName, &nextcloud); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileDeployment(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to reconcile Deployment")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileService(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to reconcile Service")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.updateStatus(ctx, &nextcloud); err != nil {
+		logger.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+func (r *NextcloudReconciler) deploymentForNextcloud(nc *nextcloudv1.Nextcloud) *appsv1.Deployment {
+	replicas := int32(1)
+	if nc.Spec.Replicas != nil {
+		replicas = *nc.Spec.Replicas
+	}
+
+	labels := map[string]string{
+		"app":     "nextcloud",
+		"version": nc.Spec.Version,
+	}
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nc.Name,
+			Namespace: nc.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Image: "nextcloud:" + nc.Spec.Version,
+						Name:  "nextcloud",
+						Ports: []corev1.ContainerPort{{
+							ContainerPort: 80,
+						}},
+						Env: []corev1.EnvVar{
+							{
+								Name:  "SQLITE_DATABASE",
+								Value: "nextcloud",
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	ctrl.SetControllerReference(nc, deployment, r.Scheme)
+	return deployment
+}
+
+func (r *NextcloudReconciler) serviceForNextcloud(nc *nextcloudv1.Nextcloud) *corev1.Service {
+	labels := map[string]string{
+		"app":     "nextcloud",
+		"version": nc.Spec.Version,
+	}
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nc.Name,
+			Namespace: nc.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Ports: []corev1.ServicePort{{
+				Port:       80,
+				TargetPort: intstr.FromInt(80),
+			}},
+		},
+	}
+
+	ctrl.SetControllerReference(nc, service, r.Scheme)
+	return service
+}
+
+func (r *NextcloudReconciler) reconcileDeployment(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	deployment := r.deploymentForNextcloud(nc)
+
+	found := &appsv1.Deployment{}
+	err := r.Get(ctx, client.ObjectKey{Name: deployment.Name, Namespace: deployment.Namespace}, found)
+	if err != nil && errors.IsNotFound(err) {
+		return r.Create(ctx, deployment)
+	} else if err != nil {
+		return err
+	}
+
+	found.Spec = deployment.Spec
+	return r.Update(ctx, found)
+}
+
+func (r *NextcloudReconciler) reconcileService(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	service := r.serviceForNextcloud(nc)
+
+	found := &corev1.Service{}
+	err := r.Get(ctx, client.ObjectKey{Name: service.Name, Namespace: service.Namespace}, found)
+	if err != nil && errors.IsNotFound(err) {
+		return r.Create(ctx, service)
+	} else if err != nil {
+		return err
+	}
+
+	found.Spec.Selector = service.Spec.Selector
+	found.Spec.Ports = service.Spec.Ports
+	return r.Update(ctx, found)
+}
+
+func (r *NextcloudReconciler) updateStatus(ctx context.Context, nc *nextcloudv1.Nextcloud) error {
+	if nc.Status.Phase != "Ready" {
+		nc.Status.Phase = "Ready"
+		return r.Status().Update(ctx, nc)
+	}
+	return nil
+}
+
 func (r *NextcloudReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nextcloudv1.Nextcloud{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Named("nextcloud").
 		Complete(r)
 }
